@@ -40,6 +40,31 @@ def preprocess_citation_multi(adj, features, num_hops, normalization="FirstOrder
     features = row_normalize(features)
     return adj, features
 
+def PPR(A, pr):
+    pagerank_prob=pr  #0.85 -1   0.65best 68
+    pr_prob = 1 - pagerank_prob
+    A_hat   = A + torch.eye(A.size(0)).to(A.device)
+    D       = torch.diag(torch.sum(A_hat,1))
+    D       = D.inverse().sqrt()
+    A_hat   = torch.mm(torch.mm(D, A_hat), D)
+    Pi = pr_prob * ((torch.eye(A.size(0)).to(A.device) - (1 - pr_prob) * A_hat).inverse())
+    Pi = Pi.cpu()
+    return Pi
+
+def calc_ppr(adj_dict, pr, device):
+    # ppr={}
+    adj = adj_dict.clone()
+    # adj.storage._value = None
+    adj = adj.to_dense()
+    adj_T = adj.t()
+    A = torch.zeros(adj.shape[0], adj.shape[0]).to(device)
+    A = adj
+    PPRM=PPR(A, pr)
+    ppr=(PPRM)
+    ###待优化
+    return ppr
+
+
 def random_walk_sparse(neighbors, num_steps):
     num_nodes = len(neighbors)
     adj_matrix_rw_buffer = []
@@ -68,6 +93,81 @@ def random_walk_sparse(neighbors, num_steps):
         adj_matrix_rw_buffer.append(adj_matrix_rw)
     return adj_matrix_rw_buffer
 
+###优化代码:
+# torch.multiprocessing    8.1未实现，存在bug
+#Use a more efficient data structure for the  visited  set: Instead of using a Python set, you can use a boolean array to keep track of visited nodes.
+# ###每个点步数相互独立###
+def random_walk(adj_matrix, weight_score, num_steps):
+    num_nodes = adj_matrix.size(0)
+    adj_matrix_rw_buffer = []
+    neighbors = [adj_matrix[node].nonzero().flatten().tolist() for node in range(num_nodes)]
+    for step in range(1, num_steps+1):
+        adj_matrix_rw = torch.zeros_like(adj_matrix)
+        visited = [set() for _ in range(num_nodes)]
+        for node in range(num_nodes):
+            current_node = node
+            # visited[node].add(current_node)  ###注释掉是考虑自环的可能,（不注释掉acc下降很厉害，待进一步验证）,这一行无法实现目标
+            flag = True
+            for current_step in range(step):
+                current_neighbors = neighbors[current_node]
+                valid_neighbors = [n for n in current_neighbors if n not in visited[node]]
+                if not valid_neighbors:
+                    flag = False
+                    break
+                # next_node_idx = random.choice(range(len(valid_neighbors)))                
+                next_node_idx = random.choices(range(len(valid_neighbors)), weights=weight_score[node][valid_neighbors])
+                current_node = valid_neighbors[next_node_idx[0]]  ###valid_neighbors才对啊
+                # visited[node].update(current_neighbors) #visited[node].update(current_neighbors)  # 无跳回实现 Add all current hop nodes to visited, 使用这一行可以达到目标
+                #但是这一行似乎实现过拟合了，我们只是要访问过的节点不被访问就可以了，没必要让所有邻居都不被访问到
+                # visited[node].update([current_node])
+            if flag:
+                adj_matrix_rw[node, current_node] = 1 ###只记录终点的位置，途径点都不记录  也就是说不做递归
+        adj_matrix_rw = adj_matrix_rw.to_sparse().coalesce()
+        adj_matrix_rw_buffer.append(adj_matrix_rw)
+    return adj_matrix_rw_buffer
+
+# ### 每个点的步数相互依赖###
+# import random
+# def random_walk(adj_matrix, num_steps):
+#     num_nodes = adj_matrix.size(0)
+#     adj_matrix_rw_buffer = []
+#     neighbors = [adj_matrix[node].nonzero().flatten().tolist() for node in range(num_nodes)]
+#     visited = [set() for _ in range(num_nodes)] 
+#     for node in range(num_nodes):
+#         walk = [node]
+#         ###visited[node].add(node)  ###注释掉是考虑自环的可能,不注释掉acc下降很厉害
+#         flag = True
+#         for current_step in range(1, num_steps+1):
+#             current_node = walk[-1]
+#             current_neighbors = neighbors[current_node]
+#             valid_neighbors = [n for n in current_neighbors if n not in visited[node]]
+#             if not valid_neighbors:
+#                 flag = False
+#                 break
+#             next_node_idx = random.choice(range(len(valid_neighbors)))
+#             current_node = valid_neighbors[next_node_idx]
+#             #visited[node].update(current_neighbors)  # Add all current hop nodes to visited
+#             walk.append(current_node)#adj_matrix_rw[node, current_node] = 1
+#         adj_matrix_rw_buffer.append(walk)
+#     ###根据random walk重构稀疏矩阵###
+#     buffer_row, buffer_col = [], []
+#     for i in range(1, num_steps+1):
+#         row, col = [], []
+#         for node, pairs in enumerate(adj_matrix_rw_buffer):
+#             if i <= len(pairs)-1:
+#                 row.append(node)
+#                 col.append(pairs[i])
+#         buffer_row.append(row)
+#         buffer_col.append(col)
+#     concatenated_list = [torch.stack([torch.tensor(buffer_row[i]), torch.tensor(buffer_col[i])]) for i in range(num_steps)]
+#     adj_matrix_rw_buffer = []
+#     for result in concatenated_list:
+#         indices = result
+#         values = torch.ones(result.shape[1])
+#         shape = torch.Size([num_nodes, num_nodes])
+#         adj_matrix_rw_buffer.append(torch.sparse.FloatTensor(indices, values, shape))
+#     return adj_matrix_rw_buffer
+
 def index_to_torch_sparse(result):
     row_tensor = torch.tensor(result[0])
     col_tensor = torch.tensor(result[1])
@@ -80,6 +180,45 @@ def index_to_torch_sparse(result):
     # shape = torch.Size([len(row_tensor), len(row_tensor)])
     return torch.sparse.FloatTensor(indices, values, shape)
 
+# def preprocess_citation_RW(adj, features, num_steps, num_rws, device, seed, dataset):
+#     if dataset!='ogbn-arxiv' and dataset!='ogbn-products':
+#         t = perf_counter()
+#         adj_eye = adj + sp.eye(adj.shape[0])
+#         adj_raw = sparse_mx_to_torch_sparse_tensor(adj_eye)#.to(device)
+#     else:
+#         t = perf_counter()
+#         adj_raw = adj
+#     adj_matrix_rw_total = []
+#     import dgl
+#     g = dgl.graph((adj_raw._indices()[0].tolist(),adj_raw._indices()[1].tolist()))
+#     t = perf_counter()
+#     nodes = [i for i in range(g.num_nodes())]
+#     adj_matrix_rw_total = []
+#     for i in range(num_rws):
+#         output_buffer = []
+#         for hop in range(1, num_steps + 1):
+#             result = []
+#             a = dgl.sampling.random_walk(g, nodes, length=hop)
+#             result.append(nodes)
+#             result.append(a[0][:,-1].tolist())
+#             output = index_to_torch_sparse(result)
+#             output_buffer.append(output)
+#         adj_matrix_rw_total.append(output_buffer)
+#         # print("finish one round")
+#     output= []
+#     for i in range(num_steps):  #
+#         sum_output = adj_matrix_rw_total[0][i]
+#         for j in range(1, num_rws):
+#             sum_output += adj_matrix_rw_total[j][i]
+#         sum_output = sum_output.coalesce()
+#         sum_output = sum_output/num_rws
+#         output.append(sum_output)
+#     print("pre time", perf_counter()-t)
+#     if dataset !='reddit' and dataset !='ogbn-arxiv':
+#         print("normalize the features")
+#         features = row_normalize(features)
+#     return output, features
+
 def preprocess_citation_RW(adj, features, num_steps, num_rws, device, seed, dataset):
     if dataset!='ogbn-arxiv' and dataset!='ogbn-products':
         t = perf_counter()
@@ -91,6 +230,7 @@ def preprocess_citation_RW(adj, features, num_steps, num_rws, device, seed, data
     adj_matrix_rw_total = []
     import ctypes
     cpp_library = ctypes.CDLL('/home/lyx/SGC/rw.so')
+    # 定义 C++ 函数的签名
     cpp_library.set_seed(ctypes.c_uint(seed))
     cpp_library.random_walk_interface.argtypes = [
         ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),
@@ -136,6 +276,48 @@ def preprocess_citation_RW(adj, features, num_steps, num_rws, device, seed, data
     if dataset !='reddit' and dataset !='ogbn-arxiv':
         print("normalize the features")
         features = row_normalize(features)
+    return output, features
+
+def preprocess_citation_RW(adj, features, num_steps, num_rws, device, seed, dataset):
+    adj_raw = adj + sp.eye(adj.shape[0])
+    adj_raw = sparse_mx_to_torch_sparse_tensor(adj_raw).to(device)
+    adj_matrix_rw_total = []
+
+    row_indices = adj_raw.coalesce().indices()[0]
+    col_indices = adj_raw.coalesce().indices()[1]
+    num_nonzero_per_row = torch.bincount(row_indices)
+    neighbors = torch.split(col_indices, num_nonzero_per_row.tolist())
+    neighbors_list = [neighbor.tolist() for neighbor in neighbors]
+    weight_score = calc_ppr(adj_raw, 0.95, device)
+    # torch.sum(ppr_sum[key_A], dim = 0)
+    for num_rw in range(num_rws):
+        adj_matrix_rw = random_walk(adj_raw.to_dense(), weight_score, num_steps)
+        # adj_matrix_rw = random_walk_sparse(neighbors_list, num_steps)
+        adj_matrix_rw_total.append(adj_matrix_rw) #[rws, steps, adj]
+        print("finish 1 round")
+    output= []
+    for i in range(num_steps):  #
+        sum_output = 0
+        for j in range(num_rws):
+            sum_output = sum_output + adj_matrix_rw_total[j][i].to_dense()
+        #print(exponential_decay(initial_lr, decay_rate, i))
+        ## normalization###
+        r = 0
+        #print("in here")
+        #adj_norm = ((sum/num_rw)).to_sparse().coalesce()
+        # sum_output = j.to_sparse().coalesce()
+        row_sum = sum_output.to_dense().sum(dim=1)
+        d_inv_sqrt = torch.pow(row_sum, r-1).flatten()
+        d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
+        d_mat_inv_sqrt = torch.diag(d_inv_sqrt)  #.to_sparse()
+        d_right_sqrt = torch.pow(row_sum, -r).flatten()
+        d_right_sqrt[torch.isinf(d_right_sqrt)] = 0.
+        d_mat_right_sqrt = torch.diag(d_right_sqrt) #.to_sparse()
+        adj_norm = d_mat_inv_sqrt.matmul(sum_output).matmul(d_mat_right_sqrt)
+        ### normalization###
+        # print(adj_norm._nnz())
+        output.append(adj_norm)
+    features = row_normalize(features)
     return output, features
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
@@ -191,6 +373,8 @@ def ssgc_precompute(features, adj, degree): ############### acc跟github版本�
     for i in range(degree):
         t = perf_counter()
         features = torch.spmm(adj, features)   ### AAX     (AX+A2X)/2
+        # torch.save(features, f'/home/lyx/SGC/papers100M_store/walks_5_hop_6/features_{i}.pt')
+        # print(adj_now._nnz())
         # adj_now = torch.spmm(adj, adj_now)
         emb = emb + (1-alpha)*features/degree
         precompute_time = perf_counter()-t
@@ -216,13 +400,59 @@ def ssgc_mask_precompute(features, adj2_list_final, use_weight):
     degree = len(adj2_list_final)
     # print(degree) 
     t = perf_counter()
-    emb = alpha * features
+    # emb = alpha * features
     emb = 0
     for i, adj in enumerate(adj2_list_final):
         features_now = torch.spmm(adj/20, features)   ### AX AAX AAAX
-        emb = emb + (1-alpha)*features_now/degree
+        print("finish one propagation")
+        torch.save(features_now, f'/home/lyx/SGC/papers100M_store/walks_30_hop_5/features_{i}.pt')
+        # features_now = 0
+        # emb = emb + (1-alpha)*features_now/degree
     precompute_time = perf_counter()-t
     return emb, precompute_time
+
+# def ssgc_mask_precompute(features, adj2_list_final, use_weight):
+#     alpha = 0.05
+#     degree = 6
+#     # print(degree) 
+#     t = perf_counter()
+#     emb = alpha * features
+#     for i in range(degree):
+#         # features_now = torch.spmm(adj, features)   ### AX AAX AAAX
+#         features_now = torch.load(f'/home/lyx/SGC/papers100M_store/walks_5_hop_6/features_{i}.pt')
+#         emb = emb + (1-alpha)*features_now/degree
+#     precompute_time = perf_counter()-t
+#     return emb, precompute_time
+
+# def ssgc_mask_precompute(features, adj2_list_final, degree):
+#     alpha = 0.05
+#     t = perf_counter()
+#     ori_features = features
+#     emb = features
+#     degree = len(adj2_list_final)
+#     for adj in adj2_list_final:
+#         features = (1-alpha) * torch.spmm(adj, features)   ### AAX     (AX+A2X)/2
+#         emb = emb + features
+#     emb /= degree
+#     emb = emb + alpha * ori_features
+#     precompute_time = perf_counter()-t
+#     return emb, precompute_time
+    
+# def ssgc_mask_precompute(features, adj2_list_final, use_weight):
+#     alpha = 0.05
+#     ori_features = features
+#     degree = len(adj2_list_final)
+#     # print(degree)
+#     t = perf_counter()
+#     emb = features
+#     for i, adj in enumerate(adj2_list_final):
+#         features = (1-alpha)*torch.spmm(adj, features)   ### AX AAX AAAX
+#         emb = emb + features
+#     emb /= degree
+#     emb = emb + alpha * ori_features
+#     precompute_time = perf_counter()-t
+#     return emb, precompute_time
+
 
 def sign_precompute(features, adj, degree):
     t = perf_counter()
@@ -232,6 +462,23 @@ def sign_precompute(features, adj, degree):
         features = torch.spmm(adj, features)   ### AAX     (AX+A2X)/2
         emb.append(features)
     precompute_time = perf_counter()-t
+    # # ########## test for over-smoothing###########
+    # print("test for over-smoothing problem")
+    # adj_now = adj
+    adj_buffer = []
+    # adj_buffer.append(adj_now)
+    # for i in range(degree):
+    #     adj_now = torch.spmm(adj, adj_now)   ###
+    #     adj_buffer.append(adj_now)
+    # components = []
+    sub_results = []
+    # for i, struct in enumerate(adj_buffer):
+    #     num_components, labels = sp.csgraph.connected_components(struct.to_dense().cpu().numpy(), directed=False, return_labels=True)
+    #     components.append(labels)
+    #     print("current hop {:}:, num_components:{:}, nnz:{:}".format(i, num_components, struct._nnz()))
+    #     sub_results.append(group_indices(labels))
+    # precompute_time = perf_counter()-t
+    # ########## test for over-smoothing###########
     return emb, precompute_time, sub_results, adj_buffer
 
 def gbp_precompute(features, adj, degree, alpha):
@@ -254,6 +501,35 @@ def gbp_mask_precompute(features, adj2_list_final, alpha):
     precompute_time = perf_counter()-t
     return emb, precompute_time
 
+# def ssgc_mask_precompute(features, adj2_list_final, use_weight):
+#     alpha = 0.01
+#     degree = len(adj2_list_final)
+#     # print(degree)
+#     t = perf_counter()
+#     emb = alpha*features
+#     if use_weight!=True:
+#         # for adj in adj2_list_final:
+#         #     features = torch.spmm(adj, features)   ### AAX     (AX+A2X)/2
+#         #     emb = emb + (1-alpha)*features/degree  #(1-alpha)
+#         #     # alpha = alpha*(1+alpha)
+#         #     # print(alpha)
+#         # precompute_time = perf_counter()-t
+
+#         cur_rate = 1.0
+#         beta = 0.
+#         for i, adj in enumerate(adj2_list_final):
+#             cur_rate = cur_rate -  beta * i
+#             features = torch.spmm(adj, features)   ### AX AAX AAAX
+#             emb = emb + cur_rate*features/degree  #(1-alpha)
+#         precompute_time = perf_counter()-t
+#         return emb, precompute_time
+#     if use_weight:
+#         output = []
+#         for adj in adj2_list_final:
+#             output.append(torch.spmm(adj, features))
+#         precompute_time = perf_counter()-t
+#         return output, precompute_time
+
 def sign_mask_precompute(features, adj2_list_final, use_weight):
     emb = []
     sub_results = []
@@ -266,7 +542,32 @@ def sign_mask_precompute(features, adj2_list_final, use_weight):
         features_now = torch.spmm(adj, features)   ### AX AAX AAAX
         emb.append(features_now)
     precompute_time = perf_counter()-t
+
+    # t = perf_counter()
+    # a = torch.stack(adj2_list_final, dim=0)
+    # c = torch.bmm(a, features.unsqueeze(0).expand(10, -1, -1))
+    # precompute_time = perf_counter()-t
+
+    # for i, struct in enumerate(adj2_list_final):
+    #     num_components, labels = sp.csgraph.connected_components(struct.to_dense().cpu().numpy(), directed=False, return_labels=True)
+    #     print("current hop {:}:, num_components:{:}, nnz:{:}".format(i+1, num_components, struct._nnz()))
+    #     sub_results.append(group_indices(labels))
     return emb, precompute_time, sub_results
+# def ssgc_mask_precompute(features, adj2_list_final, use_weight):
+#     alpha = 0.05
+#     degree = len(adj2_list_final)
+#     print(degree)
+#     t = perf_counter()
+#     ori_features = features
+#     emb = features
+#     if use_weight!=True:
+#         for adj in adj2_list_final:
+#             features = torch.spmm(adj, features)   ### AAX     (AX+A2X)/2
+#             emb = emb + (1-alpha)*features
+#     emb /= degree
+#     emb = emb + alpha * ori_features
+#     precompute_time = perf_counter()-t
+#     return emb, precompute_time
 
 def set_seed(seed, cuda):
     dgl.seed(seed)
@@ -280,7 +581,7 @@ def set_seed(seed, cuda):
     # dgl.random.seed(seed)
 
 
-def load_citation(dataset_str="cora", normalization="AugNormAdj", num_hops=2, num_wks = 1, cuda=True, model='SGC', device = f"cuda:{1}", seed = 1, r = 0.5):
+def RW_citation(dataset_str="cora", normalization="AugNormAdj", num_hops=2, num_wks = 1, cuda=True, model='SGC', device = f"cuda:{1}", seed = 1, r = 0.5):
     """
     Load Citation Networks Datasets.
     """
@@ -318,9 +619,12 @@ def load_citation(dataset_str="cora", normalization="AugNormAdj", num_hops=2, nu
     idx_test = test_idx_range.tolist()
     idx_train = range(len(y))
     idx_val = range(len(y), len(y)+500)
+
     
     if model.startswith('RW'):
         adj2_list, features_1 = preprocess_citation_RW(adj, features, num_hops, num_wks, device, seed, dataset_str)
+    elif model.startswith('SGA') :
+        adj2_list, features_1 = preprocess_citation_multi(adj, features, num_hops, normalization)
     else:
         adj1, features_1 = preprocess_citation(adj, features, normalization, r)
     # porting to pytorch
@@ -384,6 +688,16 @@ def load_reddit_data(dataset = 'reddit', normalization="AugNormAdj", num_hops = 
         adj1, _ = preprocess_citation(train_adj, features, normalization)
     # porting to pytorch
     labels = torch.LongTensor(labels)
+    # if model.startswith('SGA') or model.startswith('RW'):
+    #     adj2_list_new = []
+    #     for adj2 in adj2_list:
+    #         #adj2 = sparse_mx_to_torch_sparse_tensor(adj2).float()
+    #         adj2_list_new.append(adj2)
+    #     adj2_list_new_train = []
+    #     for adj2_train in adj2_list_train:
+    #         #adj2 = sparse_mx_to_torch_sparse_tensor(adj2).float()
+    #         adj2_list_new_train.append(adj2_train)
+
     if cuda:
         features = features.to(device)
         if model.startswith('SGA') or model.startswith('RW'):

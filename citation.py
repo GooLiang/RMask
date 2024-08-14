@@ -36,7 +36,7 @@ def main(args):
         device = 'cpu'
     if args.model.startswith('RW') or args.model.startswith('SGA'):
         print("in citiation")
-        adj2_list_final, features, labels, idx_train, idx_val, idx_test = load_citation(args.dataset, args.normalization, args.degree,  args.walks, args.cuda, args.model, device, args.seed, args.r)
+        adj2_list_final, features, labels, idx_train, idx_val, idx_test = RW_citation(args.dataset, args.normalization, args.degree,  args.walks, args.cuda, args.model, device, args.seed, args.r)
     if args.dataset.startswith('ogbn'):
         if args.dgl:
             print("in ogbn and using dgl")
@@ -49,6 +49,7 @@ def main(args):
         adj1, features, labels, idx_train, idx_val, idx_test = load_citation(args.dataset, args.normalization, args.degree,  args.walks, args.cuda, args.model, device, args.seed, args.r)
 
     print(features.size(1), labels.max().item()+1)
+    # device = 'cuda:0'
 
     if args.model == "SGC": features, precompute_time = sgc_precompute(features, adj1, args.degree)
     if args.model == "SGA_SSGC" or args.model == "RW_SSGC": features, precompute_time = ssgc_mask_precompute(features, adj2_list_final, args.use_weight)
@@ -59,9 +60,13 @@ def main(args):
     if args.model == "GBP": features, precompute_time = gbp_precompute(features, adj1, args.degree, args.alpha)
     if args.model == "RW_GAMLP": features, precompute_time, sub_results = sign_mask_precompute(features, adj2_list_final, args.use_weight)
     print("precompute time {:.4f}s".format(precompute_time))
-
+    # device = 'cuda:1'
+    # t = perf_counter()
+    # features = features.to(device)
+    # print("trans time: {:.4f}s".format(perf_counter()-t))
     model = get_model(args, args.model, features.size(1), labels.max().item()+1, args.degree + 1, args.ff_layer, args.input_dropout, args.hidden, args.dropout, args.use_weight, args.cuda, device)
     print("# Params:", get_n_params(model))
+
 
     import os
     import uuid
@@ -169,6 +174,7 @@ def main(args):
 
     print("Validation Accuracy: {:.4f} Test Accuracy: {:.4f}".format(acc_val, acc_test))
     print("Pre-compute time: {:.4f}s, train time: {:.4f}s, total: {:.4f}s".format(precompute_time, train_time, precompute_time+train_time))
+
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method('spawn')
