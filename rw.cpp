@@ -50,6 +50,7 @@ extern "C" {
                     col_records.push_back(current_node);
                 }
             }
+            // Store the node and neighbor indices for this step
             row_indices.push_back(row_records);
             col_indices.push_back(col_records);
         }
