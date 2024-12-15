@@ -84,6 +84,7 @@ def prepare_data(dataset, normalization="AugNormAdj", num_hops=2, num_wks = 1, c
         adj2_list = adj_raw
         features_1 = features
     t = perf_counter()
+    cuda = False
     if cuda:
         features_1 = features.to(device)
         # adj2_list_final = adj2_list.to(device)
@@ -103,7 +104,8 @@ def prepare_data(dataset, normalization="AugNormAdj", num_hops=2, num_wks = 1, c
     train_index = train_nid.to(device)
     val_index = val_nid.to(device)
     test_index = test_nid.to(device)
-    return adj2_list[1:], features_1, labels, n_classes, train_index, val_index, test_index, evaluator
+    # return adj2_list[1:], features_1, labels, n_classes, train_index, val_index, test_index, evaluator
+    return adj2_list, features_1, labels, n_classes, train_index, val_index, test_index, evaluator
 
 def train(model, feats, labels, loss_fcn, optimizer, train_loader, RW_model, device, evaluator):
     model.train()
