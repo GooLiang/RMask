@@ -37,7 +37,7 @@ class SGA(nn.Module):
 
     def forward(self, feature_list):
         feature_list = [self.input_drop(feature) for feature in feature_list]
-        # # # ################共享w################################################################
+        # # # ################share w ################################################################
         h = torch.stack(feature_list, dim=1)
         #global_vector = torch.softmax(torch.sigmoid(self.w(h)).squeeze(), dim=-1)
         global_vector = torch.softmax(torch.sigmoid(torch.matmul(h, self.global_w)).squeeze(2), dim=-1)   #global_vector = torch.softmax(torch.sigmoid(torch.matmul(self.input_drop(h), self.global_w)).squeeze(2), dim=-1)
