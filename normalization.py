@@ -52,7 +52,6 @@ def adj_mask_func(a, b):
    mask_per = (a_old - adj_mask._nnz())/a_old*100
    print("mask percent {:1f}%, current nnz {:}".format(mask_per, adj_mask._nnz()))
    
-   
    # a = SparseTensor(row=a.coalesce().indices()[0], col=a.coalesce().indices()[1], value = a.coalesce().values(), sparse_sizes=a.size())
    # b = SparseTensor(row=b.coalesce().indices()[0], col=b.coalesce().indices()[1], value = b.coalesce().values(), sparse_sizes=b.size())
    # rowA, colA, _ = a.coo()
@@ -115,7 +114,6 @@ def mean_normalized_adjacency(adj):
    d_mat_inv_sqrt = sp.diags(d_inv_sqrt)
    return d_mat_inv_sqrt.dot(adj).tocoo()
 
-##先AAAA，再去冗余，再正则化
 def aug_normalized_adjacency_multi(adj, num_hops):
    adj_normalize_buffer = []
    adj_raw = adj + sp.eye(adj.shape[0])
@@ -145,37 +143,6 @@ def aug_normalized_adjacency_multi(adj, num_hops):
       #adj_norm = F.normalize(adj_mask.to_dense(), p=2, dim=1).to_sparse()
       adj_normalize_buffer.append(adj_norm) ###A, mask(AA), mask(AAA), ...
    return adj_normalize_buffer
-
-# # #先AAAA，再正则化，再去冗余
-# def aug_normalized_adjacency_multi(adj, num_hops):
-#    adj_normalize_buffer = []
-#    # adj_raw = adj + sp.eye(adj.shape[0])
-#    # adj_raw = sparse_mx_to_torch_sparse_tensor(adj_raw).to('cuda:2')
-#    # row_sum = adj_raw.cpu().to_dense().sum(dim=1).to('cuda:2')
-#    # d_inv_sqrt = torch.pow(row_sum, -0.5).flatten()
-#    # d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
-#    # d_mat_inv_sqrt = torch.diag(d_inv_sqrt).to_sparse()
-#    # adj_norm = d_mat_inv_sqrt.matmul(adj_raw).matmul(d_mat_inv_sqrt)
-#    adj_norm = adj
-#    adj = None
-#    adj_dict = {}
-#    adj_dict['hop_1'] = adj_norm
-#    adj_buffer = adj_norm
-#    adj_normalize_buffer = []
-#    # adj_normalize_buffer.append(adj_buffer)
-#    for i in range(2, num_hops+1):
-#       adj_buffer = adj_norm.matmul(adj_buffer)   ###A^A^A^A^A^
-#       adj_mask = adj_buffer.cpu()
-#       mask_per_total = 0
-#       for name, mask_adj in adj_dict.items():
-#          #print("current adj is {:}, || masked adj is {:}".format(f'hop_{i}', name))
-#          adj_mask, mask_per = adj_mask_func(adj_mask.cpu(), mask_adj.cpu())
-#          mask_per_total = mask_per_total + mask_per
-#       print("current hop {:}, mask percent {:1f}%".format(i, mask_per_total))
-#       adj_dict[f'hop_{i}']= adj_mask
-#       # print(adj_mask._nnz())
-#       # adj_normalize_buffer.append(adj_mask) ###A, mask(AA), mask(AAA), ...
-#    return adj_normalize_buffer
 
 def mean_normalized_adjacency_multi(adj, num_hops):
    adj_normalize_buffer = []
@@ -211,61 +178,6 @@ def mean_normalized_adjacency_multi(adj, num_hops):
       adj_norm = d_mat_inv_sqrt.matmul(adj_mask)
       adj_normalize_buffer.append(adj_norm)
    return adj_normalize_buffer
-# #先AAAA，再正则化,再去冗余
-# def aug_normalized_adjacency_multi(adj, num_hops):
-#    adj_normalize_buffer = []
-#    adj_raw = adj + sp.eye(adj.shape[0])
-#    adj_raw = sparse_mx_to_torch_sparse_tensor(adj_raw).to('cuda:0')
-#    adj = adj_raw
-#    adj_dict = {}
-#    adj_dict['hop_0'] = adj
-#    adj_mask = adj
-#    for i in range(num_hops):
-#       adj = adj_raw.matmul(adj)
-#       adj_mask = adj
-#       row_sum = adj_mask.to_dense().sum(dim=1)
-#       d_inv_sqrt = torch.pow(row_sum, -0.5).flatten()
-#       d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
-#       d_mat_inv_sqrt = torch.diag(d_inv_sqrt).to_sparse()
-#       adj_norm = d_mat_inv_sqrt.matmul(adj_mask).matmul(d_mat_inv_sqrt)
-#       adj_mask = adj_norm
-#       for name, mask_adj in adj_dict.items():
-#          #print(f'hop_{i}', name)
-#          adj_mask = adj_mask(adj_mask, mask_adj)
-#       adj_dict[f'hop_{i}']= adj_mask
-#       adj_normalize_buffer.append(adj_mask)
-#    return adj_normalize_buffer
-# def aug_normalized_adjacency_multi(adj, num_hops):
-#    adj_normalize_buffer = []
-#    adj_raw = adj + sp.eye(adj.shape[0])
-#    adj_raw = sparse_mx_to_torch_sparse_tensor(adj_raw).to('cuda:0')
-#    adj = adj_raw
-#    adj_dict = {}
-#    adj_dict['hop_0'] = adj
-#    for i in range(num_hops):
-#       if i != 0:
-#          adj = adj_raw.matmul(adj)
-#          for name, mask_adj in adj_dict.items():
-#             #print(f'hop_{i}', name)
-#             adj = adj_mask(adj, mask_adj)
-#          adj_dict[f'hop_{i}']= adj
-#       # adj = sp.coo_matrix(adj)
-#       # row_sum = np.array(adj.sum(1))
-#       row_sum = adj.to_dense().sum(dim=1)
-      
-#       # d_inv_sqrt = np.power(row_sum, -0.5).flatten()
-#       # d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
-#       # d_mat_inv_sqrt = sp.diags(d_inv_sqrt)
-#       # adj_norm = d_mat_inv_sqrt.dot(adj).dot(d_mat_inv_sqrt).tocoo()
-#       # adj_normalize_buffer.append(adj_norm)
-
-#       d_inv_sqrt = torch.pow(row_sum, -0.5).flatten()
-#       d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
-#       d_mat_inv_sqrt = torch.diag(d_inv_sqrt).to_sparse()
-#       adj_norm = d_mat_inv_sqrt.matmul(adj).matmul(d_mat_inv_sqrt)
-#       adj_normalize_buffer.append(adj_norm)
-#    return adj_normalize_buffer
-
 
 def fetch_normalization(type):
    switcher = {
