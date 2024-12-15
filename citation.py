@@ -46,7 +46,7 @@ def main(args):
             adj2_list_final, adj1, features, labels, n_classes, idx_train, idx_val, idx_test = prepare_data(args.dataset, args.normalization, args.degree,  args.walks, args.cuda, args.model, device, args.seed, args.r, args.dgl)
     if not (args.model.startswith('RW') and not args.model.startswith('SGA')) and not args.dataset.startswith('ogbn'):
         print("in matmul")
-        adj1, features, labels, idx_train, idx_val, idx_test = load_citation(args.dataset, args.normalization, args.degree,  args.walks, args.cuda, args.model, device, args.seed, args.r)
+        adj1, features, labels, idx_train, idx_val, idx_test = RW_citation(args.dataset, args.normalization, args.degree,  args.walks, args.cuda, args.model, device, args.seed, args.r)
 
     print(features.size(1), labels.max().item()+1)
     # device = 'cuda:0'
