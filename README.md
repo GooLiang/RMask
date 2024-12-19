@@ -1,3 +1,4 @@
+# Towards Scalable and Deep Graph Neural Networks via Noise Masking
 ### Data
 We provide the citation network datasets under `data/`, which corresponds to [the public data splits](https://github.com/tkipf/gcn/tree/master/gcn/data).
 
